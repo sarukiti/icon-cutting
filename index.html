@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>画像正方形切り抜きツール (高機能版)</title>
+    <style>
+        /* 基本的なページスタイル */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+            color: #1c1e21;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* コンテンツ全体を囲むコンテナ */
+        .container {
+            width: 95%;
+            max-width: 1200px;
+            background-color: #ffffff;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 25px;
+        }
+
+        /* URL入力エリア */
+        .input-area {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        #imageUrl {
+            flex-grow: 1;
+            padding: 12px;
+            border: 1px solid #ccd0d5;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+        #imageUrl:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+        }
+
+        /* ボタンのスタイル */
+        button {
+            padding: 12px 24px;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: background-color 0.2s, box-shadow 0.2s;
+        }
+        button:hover {
+            background-color: #0056b3;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        /* キャンバスエリアのレイアウト */
+        .canvas-wrapper {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 30px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        .canvas-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* メインのキャンバス */
+        #imageCanvas {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            cursor: grab;
+            background-color: #f9f9f9;
+        }
+
+        h2 {
+            margin: 0;
+            color: #555;
+            font-size: 1.2em;
+        }
+
+        /* ダウンロードボタン */
+        #downloadLink {
+            display: none; /* 初期状態では非表示 */
+            margin-top: 15px;
+            text-decoration: none;
+            background-color: #28a745;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            transition: background-color 0.2s;
+        }
+        #downloadLink:hover {
+            background-color: #218838;
+        }
+
+        /* 注意書きのスタイル */
+        .note {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #fff3cd;
+            border-left: 5px solid #ffeeba;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>画像正方形切り抜きツール ✂️</h1>
+        
+        <div class="input-area">
+            <input type="text" id="imageUrl" placeholder="画像のURLをここに貼り付け">
+            <button id="loadImage">画像を読み込む</button>
+        </div>
+
+        <div class="note">
+            <p><strong>ヒント:</strong> 左の画像上で、枠をドラッグして移動、四隅をドラッグしてサイズを変更できます。</p>
+            <p><strong>注意:</strong> CORSポリシーが設定されている他サイトの画像は読み込めない場合があります。その際は、一度画像をPCに保存し、画像アップロードサイト等をご利用ください。</p>
+        </div>
+
+        <div class="canvas-wrapper">
+            <div class="canvas-container">
+                <h2>1. 元画像 (枠を操作して範囲選択)</h2>
+                <canvas id="imageCanvas" width="500" height="500"></canvas>
+            </div>
+            <div class="canvas-container">
+                <h2>2. 切り抜き結果</h2>
+                <canvas id="croppedCanvas" width="250" height="250"></canvas>
+                <a id="downloadLink" download="cropped-image.png">画像をダウンロード</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM要素の取得
+        const imageUrlInput = document.getElementById('imageUrl');
+        const loadImageBtn = document.getElementById('loadImage');
+        const imageCanvas = document.getElementById('imageCanvas');
+        const croppedCanvas = document.getElementById('croppedCanvas');
+        const downloadLink = document.getElementById('downloadLink');
+        const ctx = imageCanvas.getContext('2d');
+        const croppedCtx = croppedCanvas.getContext('2d');
+
+        // 変数の初期化
+        let originalImage = new Image();
+        let isDragging = false;
+        let isResizing = false;
+        let currentHandle = null;
+        let startMouseX, startMouseY;
+        let startBoxX, startBoxY;
+        const HANDLE_SIZE = 10; // リサイズハンドルの大きさ
+
+        // 切り抜き範囲の情報を保持するオブジェクト
+        let cropBox = {
+            x: 50,
+            y: 50,
+            size: 200
+        };
+        let imageLoaded = false;
+
+        // --- イベントリスナー ---
+
+        // 「画像を読み込む」ボタンのクリックイベント
+        loadImageBtn.addEventListener('click', () => {
+            const url = imageUrlInput.value.trim();
+            if (!url) {
+                alert('画像のURLを入力してください。');
+                return;
+            }
+            originalImage.crossOrigin = "Anonymous"; // CORSエラー対策
+            originalImage.onload = handleImageLoad;
+            originalImage.onerror = () => alert('画像の読み込みに失敗しました。URLが正しいか、CORSポリシーを確認してください。');
+            originalImage.src = url;
+        });
+
+        // マウスのボタンが押された時のイベント
+        imageCanvas.addEventListener('mousedown', (e) => {
+            if (!imageLoaded) return;
+            const pos = getMousePos(imageCanvas, e);
+
+            // リサイズハンドルを掴んでいるかチェック
+            currentHandle = getHandleAt(pos.x, pos.y);
+            if (currentHandle) {
+                isResizing = true;
+            } 
+            // 枠の内側を掴んでいるかチェック
+            else if (isWithinBox(pos.x, pos.y)) {
+                isDragging = true;
+            }
+
+            startMouseX = pos.x;
+            startMouseY = pos.y;
+            startBoxX = cropBox.x;
+            startBoxY = cropBox.y;
+        });
+
+        // マウスが移動した時のイベント
+        imageCanvas.addEventListener('mousemove', (e) => {
+            if (!imageLoaded) return;
+            const pos = getMousePos(imageCanvas, e);
+
+            // ドラッグ・リサイズ処理
+            if (isDragging) {
+                moveBox(pos.x, pos.y);
+            } else if (isResizing) {
+                resizeBox(pos.x, pos.y);
+            }
+
+            // カーソルの形状を変更
+            updateCursor(pos.x, pos.y);
+        });
+
+        // マウスのボタンが離された時のイベント
+        imageCanvas.addEventListener('mouseup', () => {
+            isDragging = false;
+            isResizing = false;
+            currentHandle = null;
+        });
+        
+        // マウスがキャンバス外に出た時のイベント
+        imageCanvas.addEventListener('mouseleave', () => {
+            isDragging = false;
+            isResizing = false;
+            currentHandle = null;
+        });
+
+        // --- 関数定義 ---
+
+        // 画像が読み込まれた時の処理
+        function handleImageLoad() {
+            // 画像のアスペクト比を保ったままキャンバスに合わせる
+            const MAX_WIDTH = 500;
+            const MAX_HEIGHT = 500;
+            let width = originalImage.width;
+            let height = originalImage.height;
+
+            if (width > height) {
+                if (width > MAX_WIDTH) {
+                    height *= MAX_WIDTH / width;
+                    width = MAX_WIDTH;
+                }
+            } else {
+                if (height > MAX_HEIGHT) {
+                    width *= MAX_HEIGHT / height;
+                    height = MAX_HEIGHT;
+                }
+            }
+            imageCanvas.width = width;
+            imageCanvas.height = height;
+
+            // 切り抜き枠を中央に初期化
+            cropBox.size = Math.min(width, height) * 0.5;
+            cropBox.x = (width - cropBox.size) / 2;
+            cropBox.y = (height - cropBox.size) / 2;
+            
+            imageLoaded = true;
+            draw();
+        }
+
+        // 全体の描画処理
+        function draw() {
+            if (!imageLoaded) return;
+            
+            // 1. キャンバスをクリア
+            ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
+            
+            // 2. 元画像を描画
+            ctx.drawImage(originalImage, 0, 0, imageCanvas.width, imageCanvas.height);
+            
+            // 3. 選択範囲外を暗くするオーバーレイ
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.beginPath();
+            ctx.rect(cropBox.x, cropBox.y, cropBox.size, cropBox.size);
+            ctx.rect(imageCanvas.width, 0, -imageCanvas.width, imageCanvas.height);
+            ctx.fill();
+
+            // 4. 選択範囲の枠線を描画
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(cropBox.x, cropBox.y, cropBox.size, cropBox.size);
+
+            // 5. リサイズハンドルを描画
+            drawHandles();
+
+            // 6. プレビューを更新
+            updatePreview();
+        }
+
+        // リサイズハンドルの描画
+        function drawHandles() {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            const handles = getHandles();
+            for (const handle of handles) {
+                ctx.fillRect(handle.x - HANDLE_SIZE / 2, handle.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+            }
+        }
+        
+        // プレビューの更新とダウンロードリンクの生成
+        function updatePreview() {
+            const scaleX = originalImage.width / imageCanvas.width;
+            const scaleY = originalImage.height / imageCanvas.height;
+
+            const sourceX = cropBox.x * scaleX;
+            const sourceY = cropBox.y * scaleY;
+            const sourceSize = cropBox.size * Math.min(scaleX, scaleY);
+
+            croppedCtx.clearRect(0, 0, croppedCanvas.width, croppedCanvas.height);
+            croppedCtx.drawImage(
+                originalImage,
+                sourceX, sourceY, sourceSize, sourceSize,
+                0, 0, croppedCanvas.width, croppedCanvas.height
+            );
+
+            downloadLink.href = croppedCanvas.toDataURL('image/png');
+            downloadLink.style.display = 'inline-block';
+        }
+
+        // 枠の移動処理
+        function moveBox(mouseX, mouseY) {
+            const dx = mouseX - startMouseX;
+            const dy = mouseY - startMouseY;
+
+            cropBox.x = startBoxX + dx;
+            cropBox.y = startBoxY + dy;
+
+            // 枠がキャンバスからはみ出ないように制限
+            cropBox.x = Math.max(0, Math.min(cropBox.x, imageCanvas.width - cropBox.size));
+            cropBox.y = Math.max(0, Math.min(cropBox.y, imageCanvas.height - cropBox.size));
+
+            draw();
+        }
+
+        // 枠のリサイズ処理（安定性を向上させたバージョン）
+        function resizeBox(mouseX, mouseY) {
+            let newX = cropBox.x;
+            let newY = cropBox.y;
+            let newSize = cropBox.size;
+
+            // リサイズ時の固定点（対角の角）を基準に計算
+            const rightAnchor = cropBox.x + cropBox.size;
+            const bottomAnchor = cropBox.y + cropBox.size;
+
+            switch (currentHandle) {
+                case 'topLeft':
+                    newSize = Math.max(rightAnchor - mouseX, bottomAnchor - mouseY);
+                    newX = rightAnchor - newSize;
+                    newY = bottomAnchor - newSize;
+                    break;
+                case 'topRight':
+                    newSize = Math.max(mouseX - cropBox.x, bottomAnchor - mouseY);
+                    newX = cropBox.x; // X座標は固定
+                    newY = bottomAnchor - newSize;
+                    break;
+                case 'bottomLeft':
+                    newSize = Math.max(rightAnchor - mouseX, mouseY - cropBox.y);
+                    newX = rightAnchor - newSize;
+                    newY = cropBox.y; // Y座標は固定
+                    break;
+                case 'bottomRight':
+                    newSize = Math.max(mouseX - cropBox.x, mouseY - cropBox.y);
+                    // X, Y座標は固定
+                    newX = cropBox.x;
+                    newY = cropBox.y;
+                    break;
+            }
+
+            // 最小サイズ制限
+            if (newSize < 20) return;
+
+            // はみ出しチェック
+            if (newX >= 0 && newY >= 0 && newX + newSize <= imageCanvas.width && newY + newSize <= imageCanvas.height) {
+                cropBox.x = newX;
+                cropBox.y = newY;
+                cropBox.size = newSize;
+                draw();
+            }
+        }
+        
+        // カーソルの形状を更新
+        function updateCursor(x, y) {
+            const handle = getHandleAt(x, y);
+            if (handle) {
+                if (handle === 'topLeft' || handle === 'bottomRight') imageCanvas.style.cursor = 'nwse-resize';
+                else imageCanvas.style.cursor = 'nesw-resize';
+            } else if (isWithinBox(x, y)) {
+                imageCanvas.style.cursor = 'move';
+            } else {
+                imageCanvas.style.cursor = 'default';
+            }
+        }
+
+        // --- ヘルパー関数 ---
+
+        // マウス座標をキャンバス座標に変換
+        function getMousePos(canvas, evt) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: evt.clientX - rect.left,
+                y: evt.clientY - rect.top
+            };
+        }
+
+        // 指定座標が枠の内側にあるか判定
+        function isWithinBox(x, y) {
+            return x > cropBox.x && x < cropBox.x + cropBox.size &&
+                   y > cropBox.y && y < cropBox.y + cropBox.size;
+        }
+
+        // ハンドルの位置リストを取得
+        function getHandles() {
+            return [
+                { name: 'topLeft', x: cropBox.x, y: cropBox.y },
+                { name: 'topRight', x: cropBox.x + cropBox.size, y: cropBox.y },
+                { name: 'bottomLeft', x: cropBox.x, y: cropBox.y + cropBox.size },
+                { name: 'bottomRight', x: cropBox.x + cropBox.size, y: cropBox.y + cropBox.size }
+            ];
+        }
+
+        // 指定座標にあるハンドルの名前を取得
+        function getHandleAt(x, y) {
+            const handles = getHandles();
+            for (const handle of handles) {
+                if (Math.abs(x - handle.x) < HANDLE_SIZE && Math.abs(y - handle.y) < HANDLE_SIZE) {
+                    return handle.name;
+                }
+            }
+            return null;
+        }
+
+    </script>
+</body>
+</html>
